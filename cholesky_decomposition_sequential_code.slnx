@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="cholesky_decomposition_sequential_code/cholesky_decomposition_sequential_code.vcxproj" />
+</Solution>
