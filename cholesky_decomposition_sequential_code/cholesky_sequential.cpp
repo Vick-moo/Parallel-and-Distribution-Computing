@@ -225,7 +225,7 @@ static void print_table(const Result* r, int count, int base_n)
 // =============================================================================
 int main(int argc, char** argv)
 {
-    const int sizes[] = { 256, 512, 1024, 2048, 4096 };
+    const int sizes[] = { 1000, 1500, 2000, 2500, 3000 };
     const int nSizes  = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     int reps = 3;                                   // default repetitions
