@@ -143,21 +143,27 @@ Cholesky Decomposition - 代码逻辑笔记
 五、当前状态
 ----------------------------------------------------------------
 
-- 已本地 commit，未 push 到 GitHub
-- commit message: Add correctness verification, warm-up run, and dynamic result storage
+- 已推送到 GitHub（main 分支）
+
+- commit 记录：
+  1. Add correctness verification, warm-up run, and dynamic result storage
+  2. Show current error and tolerance in results table
 
 - 改动内容：
   1. 抽出 cholesky_factor() 函数，warm-up / 正式计时 / 验证共用同一份代码
-  2. 加 verify_factor()，打印 max |A - L*L^T|
+  2. 加 verify_factor()，计算 max |A - L*L^T|
   3. 每个 size 先跑一次不计时的 warm-up
   4. 默认 reps 从 3 改成 5
   5. Result results[5] 改成 vector<Result> results(nSizes)
   6. 失败时返回 ok = false，表格打印 FAILED，不再假装 0 ms
+  7. 表格加 Current Error / Max Acceptable / Status 三列
+  8. 阈值 REL_TOL = 1e-9（relative），Max Acceptable = REL_TOL * max|A|
 
-- 实测验证误差：1.137e-13 ~ 2.274e-13（正常浮点舍入范围）
+- 实测验证误差：1.137e-13 ~ 2.274e-13（全部 PASS）
 
 - 下一步：
   1. 写 parallel 版本（OpenMP），不要直接并行外层 i，会 data race
   2. 按列或分块并行
   3. 同机对比 sequential vs parallel，验证用 relative tolerance
+
 

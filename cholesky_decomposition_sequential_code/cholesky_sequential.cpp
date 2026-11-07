@@ -148,9 +148,13 @@ static bool cholesky_factor(int n, const vector<double>& A, vector<double>& L)
 //  [5] Correctness check: max |A - L*L^T|
 // =============================================================================
 // Runs after the timed region, so it never affects the benchmark numbers.
-// A value around 1e-12 .. 1e-10 is normal floating-point rounding; 1e-3 or
-// larger means the factorisation is wrong.
+// A value around 1e-12 .. 1e-10 is normal floating-point rounding.
+//
+// The pass/fail decision uses the relative error:
+//     max |A - L*L^T| / max |A|  <=  REL_TOL
 // =============================================================================
+static const double REL_TOL = 1e-9;
+
 static double verify_factor(int n, const vector<double>& A, const vector<double>& L)
 {
     double max_abs = 0.0;
@@ -176,7 +180,8 @@ struct Result {
     int    n;
     double best_ms;      // fastest of the repetitions
     double avg_ms;       // average over all repetitions
-    double max_err;      // max |A - L*L^T| after the last run
+    double a_max;        // max |A[i][j]|, scales the relative tolerance
+    double current_err;  // max |A - L*L^T| for this matrix size
     bool   ok;           // false if the matrix was not positive definite
 };
 
@@ -186,11 +191,12 @@ struct Result {
 static Result run_one(int n, int reps)
 {
     Result r;
-    r.n       = n;
-    r.best_ms = 0.0;
-    r.avg_ms  = 0.0;
-    r.max_err = 0.0;
-    r.ok      = true;
+    r.n           = n;
+    r.best_ms     = 0.0;
+    r.avg_ms      = 0.0;
+    r.a_max       = 0.0;
+    r.current_err = 0.0;
+    r.ok          = true;
 
     // The matrices are allocated inside this function, so they are released
     // when it returns and memory does not accumulate across matrix sizes.
@@ -198,6 +204,12 @@ static Result run_one(int n, int reps)
 
     make_positive_definite(n, A);
     L.assign((size_t)n * (size_t)n, 0.0);
+
+    // Largest entry of A. Used later to turn REL_TOL into an absolute limit.
+    for (size_t i = 0; i < A.size(); i++) {
+        double v = fabs(A[i]);
+        if (v > r.a_max) r.a_max = v;
+    }
 
     // Warm-up: one untimed run. Pulls the matrix into cache, triggers any
     // first-touch page faults and brings the CPU up to its sustained clock.
@@ -229,7 +241,7 @@ static Result run_one(int n, int reps)
     }
 
     // Correctness check, outside the timed region.
-    r.max_err = verify_factor(n, A, L);
+    r.current_err = verify_factor(n, A, L);
 
     r.best_ms = t_best * 1000.0;
     r.avg_ms  = (t_sum / (double)reps) * 1000.0;
@@ -243,11 +255,12 @@ static Result run_one(int n, int reps)
 static void print_table(const Result* r, int count, int base_n)
 {
     const char* sep =
-        "+----------------------+--------------+---------------+-----------------+";
+        "+----------------------+--------------+---------------+---------------+----------------+-----------------+----------+";
 
     printf("\n%s\n", sep);
-    printf("| %-20s | %-12s | %-13s | %-15s |\n",
-           "Reason for Selection", "Matrix Size", "Best Ts (ms)", "Average Ts (ms)");
+    printf("| %-20s | %-12s | %-13s | %-13s | %-14s | %-15s | %-8s |\n",
+           "Reason for Selection", "Matrix Size", "Best Ts (ms)", "Average Ts (ms)",
+           "Current Error", "Max Acceptable", "Status");
     printf("%s\n", sep);
 
     for (int i = 0; i < count; i++) {
@@ -263,13 +276,17 @@ static void print_table(const Result* r, int count, int base_n)
         else        snprintf(reason, sizeof(reason), "%gx scale up", ratio);
 
         if (!r[i].ok) {
-            printf("| %-20s | %-12s | %13s | %15s |\n",
-                   reason, sizebuf, "FAILED", "FAILED");
+            printf("| %-20s | %-12s | %13s | %13s | %14s | %15s | %-8s |\n",
+                   reason, sizebuf, "FAILED", "FAILED", "-", "-", "FAIL");
             continue;
         }
 
-        printf("| %-20s | %-12s | %13.3f | %15.3f |\n",
-               reason, sizebuf, r[i].best_ms, r[i].avg_ms);
+        double acceptable = REL_TOL * r[i].a_max;
+        const char* status = (r[i].current_err <= acceptable) ? "PASS" : "FAIL";
+
+        printf("| %-20s | %-12s | %13.3f | %13.3f | %14.3e | %15.3e | %-8s |\n",
+               reason, sizebuf, r[i].best_ms, r[i].avg_ms,
+               r[i].current_err, acceptable, status);
     }
 
     printf("%s\n", sep);
@@ -307,7 +324,7 @@ int main(int argc, char** argv)
         }
         else {
             printf("best %9.3f ms   avg %9.3f ms   max|A-LLt| = %.3e\n",
-                   results[s].best_ms, results[s].avg_ms, results[s].max_err);
+                   results[s].best_ms, results[s].avg_ms, results[s].current_err);
         }
     }
 
