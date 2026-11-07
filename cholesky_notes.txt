@@ -167,3 +167,41 @@ Cholesky Decomposition - 代码逻辑笔记
   3. 同机对比 sequential vs parallel，验证用 relative tolerance
 
 
+六、CUDA 版本
+----------------------------------------------------------------
+
+文件：
+  cholesky_cuda/cholesky_cuda.cu
+  cholesky_cuda/build.bat
+
+编译：
+  先运行 vcvars64.bat 初始化 MSVC，再执行
+  nvcc -O3 -std=c++17 -arch=sm_89 -o cholesky_cuda.exe cholesky_cuda.cu
+
+算法：column-oriented right-looking
+  for j = 0..n-1:
+    1. L[j][j] = sqrt(A[j][j])            1 个线程
+    2. L[i][j] = A[i][j] / L[j][j]        n-j 个线程
+    3. A[i][k] -= L[i][j] * L[k][j]       (n-j)^2 个线程，2D grid
+
+  update kernel 里 threadIdx.x 对应列 k，保证写 A[i][k] 时 coalesced。
+
+实测（reps=5，RTX 4050 Laptop，sm_89）：
+
+  n      CPU ms     GPU best ms    speedup
+  1000   133.319    28.364         4.70x
+  1500   447.450    62.983         7.10x
+  2000  1208.472   169.673         7.12x
+  2500  2802.033   496.965         5.64x
+  3000  4828.948   731.322         6.60x
+
+  全部 PASS，误差 2.501e-12 ~ 1.046e-11。
+
+注意：
+  - GPU 用 right-looking，浮点求和顺序和 CPU left-looking 不同，
+    误差比 CPU 略大，但仍远低于 1e-9 的阈值。
+  - RTX 4050 的 FP64 吞吐只有 FP32 的 1/64 左右，是加速比的限制因素。
+  - 没有做 tiled 优化（Phase 3 已取消）。
+
+
+
