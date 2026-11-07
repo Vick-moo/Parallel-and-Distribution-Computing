@@ -11,12 +11,13 @@
 //                          g++ -O3 -std=c++17 -o cholesky cholesky_sequential.cpp
 //
 //  Run:
-//      cholesky.exe              <-- 5 matrix sizes, 3 repetitions each
-//      cholesky.exe 5            <-- 5 matrix sizes, 5 repetitions each
+//      cholesky.exe              <-- 5 matrix sizes, 5 repetitions each
+//      cholesky.exe 10           <-- 5 matrix sizes, 10 repetitions each
 //
-//  The program runs all five matrix sizes, repeats each one N times, and then
-//  prints a single summary table reporting both the fastest run and the
-//  average of all runs.
+//  Each size gets one untimed warm-up run, then N timed repetitions. After
+//  the timed runs the factorisation is checked against A = L * L^T and the
+//  maximum absolute error is printed. The summary table reports both the
+//  fastest run and the average of all runs.
 // =============================================================================
 
 #include <cstdio>
@@ -109,16 +110,78 @@ static void make_positive_definite(int n, vector<double>& A)
 }
 
 // =============================================================================
-//  [4] Result of one experiment
+//  [4] Core Cholesky factorisation
+// =============================================================================
+// A = L * L^T, computed into L. Returns false if the input is not positive
+// definite. Kept as a separate function so the warm-up run, the timed runs and
+// the correctness check all execute exactly the same code.
+// =============================================================================
+static bool cholesky_factor(int n, const vector<double>& A, vector<double>& L)
+{
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j <= i; j++) {
+
+            double sum = 0;
+
+            for (int k = 0; k < j; k++) {
+                sum += L[(size_t)i * n + k] * L[(size_t)j * n + k];
+            }
+
+            if (i == j) {
+                // Guard against a non-SPD input; this is not a verification
+                // step, it simply prevents sqrt() from receiving a negative
+                // number and silently producing NaN.
+                double d = A[(size_t)i * n + i] - sum;
+                if (d <= 0) return false;
+                L[(size_t)i * n + j] = sqrt(d);
+            }
+            else {
+                L[(size_t)i * n + j] =
+                    (A[(size_t)i * n + j] - sum) / L[(size_t)j * n + j];
+            }
+        }
+    }
+    return true;
+}
+
+// =============================================================================
+//  [5] Correctness check: max |A - L*L^T|
+// =============================================================================
+// Runs after the timed region, so it never affects the benchmark numbers.
+// A value around 1e-12 .. 1e-10 is normal floating-point rounding; 1e-3 or
+// larger means the factorisation is wrong.
+// =============================================================================
+static double verify_factor(int n, const vector<double>& A, const vector<double>& L)
+{
+    double max_abs = 0.0;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j <= i; j++) {          // L is lower triangular
+            double s = 0.0;
+            for (int k = 0; k <= j; k++) {
+                s += L[(size_t)i * n + k] * L[(size_t)j * n + k];
+            }
+            double e = fabs(s - A[(size_t)i * n + j]);
+            if (e > max_abs) max_abs = e;
+        }
+    }
+
+    return max_abs;
+}
+
+// =============================================================================
+//  [6] Result of one experiment
 // =============================================================================
 struct Result {
     int    n;
     double best_ms;      // fastest of the repetitions
     double avg_ms;       // average over all repetitions
+    double max_err;      // max |A - L*L^T| after the last run
+    bool   ok;           // false if the matrix was not positive definite
 };
 
 // =============================================================================
-//  [5] Run one matrix size: generate the matrix, then time the repetitions
+//  [7] Run one matrix size: generate the matrix, then time the repetitions
 // =============================================================================
 static Result run_one(int n, int reps)
 {
@@ -126,6 +189,8 @@ static Result run_one(int n, int reps)
     r.n       = n;
     r.best_ms = 0.0;
     r.avg_ms  = 0.0;
+    r.max_err = 0.0;
+    r.ok      = true;
 
     // The matrices are allocated inside this function, so they are released
     // when it returns and memory does not accumulate across matrix sizes.
@@ -133,6 +198,13 @@ static Result run_one(int n, int reps)
 
     make_positive_definite(n, A);
     L.assign((size_t)n * (size_t)n, 0.0);
+
+    // Warm-up: one untimed run. Pulls the matrix into cache, triggers any
+    // first-touch page faults and brings the CPU up to its sustained clock.
+    if (!cholesky_factor(n, A, L)) {
+        r.ok = false;
+        return r;
+    }
 
     double t_best = 0.0;
     double t_sum  = 0.0;
@@ -143,44 +215,21 @@ static Result run_one(int n, int reps)
 
         double t0 = now_sec();
 
-        // =====================================================================
-        //  Cholesky factorisation -- the core algorithm, unchanged
-        // =====================================================================
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j <= i; j++) {
-
-                double sum = 0;
-
-                for (int k = 0; k < j; k++) {
-                    sum += L[(size_t)i * n + k] * L[(size_t)j * n + k];
-                }
-
-                if (i == j) {
-                    // Guard against a non-SPD input; this is not a verification
-                    // step, it simply prevents sqrt() from receiving a negative
-                    // number and silently producing NaN.
-                    double d = A[(size_t)i * n + i] - sum;
-                    if (d <= 0) {
-                        printf("Matrix is not positive definite at row %d\n", i);
-                        return r;
-                    }
-                    L[(size_t)i * n + j] = sqrt(d);
-                }
-                else {
-                    L[(size_t)i * n + j] =
-                        (A[(size_t)i * n + j] - sum) / L[(size_t)j * n + j];
-                }
-            }
-        }
-        // =====================================================================
-        //  End of the core algorithm
-        // =====================================================================
+        bool ok = cholesky_factor(n, A, L);
 
         double dt = now_sec() - t0;
+
+        if (!ok) {
+            r.ok = false;
+            return r;
+        }
 
         t_sum += dt;
         if (rep == 0 || dt < t_best) t_best = dt;
     }
+
+    // Correctness check, outside the timed region.
+    r.max_err = verify_factor(n, A, L);
 
     r.best_ms = t_best * 1000.0;
     r.avg_ms  = (t_sum / (double)reps) * 1000.0;
@@ -189,7 +238,7 @@ static Result run_one(int n, int reps)
 }
 
 // =============================================================================
-//  [6] Print the results table
+//  [8] Print the results table
 // =============================================================================
 static void print_table(const Result* r, int count, int base_n)
 {
@@ -213,6 +262,12 @@ static void print_table(const Result* r, int count, int base_n)
         if (i == 0) snprintf(reason, sizeof(reason), "Baseline");
         else        snprintf(reason, sizeof(reason), "%gx scale up", ratio);
 
+        if (!r[i].ok) {
+            printf("| %-20s | %-12s | %13s | %15s |\n",
+                   reason, sizebuf, "FAILED", "FAILED");
+            continue;
+        }
+
         printf("| %-20s | %-12s | %13.3f | %15.3f |\n",
                reason, sizebuf, r[i].best_ms, r[i].avg_ms);
     }
@@ -228,7 +283,7 @@ int main(int argc, char** argv)
     const int sizes[] = { 1000, 1500, 2000, 2500, 3000 };
     const int nSizes  = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
-    int reps = 3;                                   // default repetitions
+    int reps = 5;                                   // default repetitions
     if (argc > 1) reps = atoi(argv[1]);
 
     if (reps < 1) {
@@ -236,7 +291,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    Result results[5];
+    vector<Result> results(nSizes);
 
     printf("Sequential Cholesky baseline\n");
     printf("Matrix sizes: %d   Repetitions per size: %d\n\n", nSizes, reps);
@@ -247,11 +302,16 @@ int main(int argc, char** argv)
 
         results[s] = run_one(sizes[s], reps);
 
-        printf("best %9.3f ms   avg %9.3f ms\n",
-               results[s].best_ms, results[s].avg_ms);
+        if (!results[s].ok) {
+            printf("FAILED (matrix is not positive definite)\n");
+        }
+        else {
+            printf("best %9.3f ms   avg %9.3f ms   max|A-LLt| = %.3e\n",
+                   results[s].best_ms, results[s].avg_ms, results[s].max_err);
+        }
     }
 
-    print_table(results, nSizes, sizes[0]);
+    print_table(results.data(), nSizes, sizes[0]);
 
     return 0;
 }
