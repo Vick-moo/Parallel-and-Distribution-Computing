@@ -32,6 +32,12 @@ Release/
 *.log
 *.build
 
+# ---- Build artifacts (parallel project intermediates) ----
+*.recipe
+*.iobj
+*.ipdb
+*.bak
+
 # ---- OS junk ----
 Thumbs.db
 desktop.ini

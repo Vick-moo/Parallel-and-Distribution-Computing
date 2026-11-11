@@ -3,5 +3,6 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="cholesky_decomposition_sequential_code/cholesky_decomposition_sequential_code.vcxproj" />
+  <Project Path="cholesky_decomposition_sequential_code/cholesky_decomposition_sequential_code.vcxproj" Id="e09a98c8-c08c-4519-bfa1-997e8cddb2c1" />
+  <Project Path="cholesky_decomposition_parallel_code/cholesky_decomposition_parallel_code.vcxproj" Id="7b3f5d2a-9c41-4e88-b6a7-2d5c1f0e8a34" />
 </Solution>
