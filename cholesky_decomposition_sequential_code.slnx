@@ -4,4 +4,5 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="cholesky_decomposition_sequential_code/cholesky_decomposition_sequential_code.vcxproj" Id="e09a98c8-c08c-4519-bfa1-997e8cddb2c1" />
+  <Project Path="cholesky_decomposition_sequential_code/cholesky_openmp.vcxproj" Id="3c1f7a52-8d24-4b6e-9a17-5f2c8b0d6e41" />
 </Solution>
