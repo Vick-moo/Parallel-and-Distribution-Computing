@@ -9,8 +9,8 @@
 //      nvcc -O3 -std=c++17 -arch=sm_89 -o cholesky_cuda.exe cholesky_cuda.cu
 //
 //  Run:
-//      cholesky_cuda.exe            <-- 5 matrix sizes, 5 repetitions each
-//      cholesky_cuda.exe 10         <-- 5 matrix sizes, 10 repetitions each
+//      cholesky_cuda.exe            <-- 6 matrix sizes, 5 repetitions each
+//      cholesky_cuda.exe 10         <-- 6 matrix sizes, 10 repetitions each
 //
 //  The CPU reference and the GPU version use the same RNG seed, so both
 //  factorise exactly the same matrix. Every result is checked against
@@ -365,7 +365,7 @@ static void print_table(const Result* r, int count, int base_n)
 // =============================================================================
 int main(int argc, char** argv)
 {
-    const int sizes[] = { 1000, 1500, 2000, 2500, 3000 };
+    const int sizes[] = { 1000, 1500, 2000, 2500, 3000, 3500 };
     const int nSizes  = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     int reps = 5;

@@ -11,8 +11,8 @@
 //                          g++ -O3 -std=c++17 -o cholesky cholesky_parallel.cpp
 //
 //  Run:
-//      cholesky.exe              <-- 5 matrix sizes, 5 repetitions each
-//      cholesky.exe 10           <-- 5 matrix sizes, 10 repetitions each
+//      cholesky.exe              <-- 6 matrix sizes, 5 repetitions each
+//      cholesky.exe 10           <-- 6 matrix sizes, 10 repetitions each
 //
 //  The factorisation itself is deliberately kept to the textbook three nested
 //  loops -- no blocking, no vectorisation, no threading:
@@ -386,7 +386,7 @@ static bool parse_reps(int argc, char** argv, int& reps)
 // =============================================================================
 int main(int argc, char** argv)
 {
-    const int sizes[] = { 1000, 1500, 2000, 2500, 3000 };
+    const int sizes[] = { 1000, 1500, 2000, 2500, 3000, 3500 };
     const int nSizes  = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     int reps = 5;

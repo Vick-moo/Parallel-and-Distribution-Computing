@@ -11,8 +11,8 @@
 //                          g++ -O3 -std=c++17 -o cholesky cholesky_sequential.cpp
 //
 //  Run:
-//      cholesky.exe              <-- 5 matrix sizes, 5 repetitions each
-//      cholesky.exe 10           <-- 5 matrix sizes, 10 repetitions each
+//      cholesky.exe              <-- 6 matrix sizes, 5 repetitions each
+//      cholesky.exe 10           <-- 6 matrix sizes, 10 repetitions each
 //
 //  Each size gets one untimed warm-up run, then N timed repetitions. After
 //  the timed runs the factorisation is checked against A = L * L^T and the
@@ -297,7 +297,7 @@ static void print_table(const Result* r, int count, int base_n)
 // =============================================================================
 int main(int argc, char** argv)
 {
-    const int sizes[] = { 1000, 1500, 2000, 2500, 3000 };
+    const int sizes[] = { 1000, 1500, 2000, 2500, 3000, 3500 };
     const int nSizes  = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     int reps = 5;                                   // default repetitions
