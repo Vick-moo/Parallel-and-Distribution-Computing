@@ -74,14 +74,6 @@
 
   <PropertyGroup Label="UserMacros" />
 
-  <!-- Give this project its own intermediate directory. The sequential project
-       uses x64\Release\ for the same purpose, and MSBuild warns (MSB8028) that
-       sharing it can break Clean/Rebuild. Both .exe files still land in the
-       solution's x64\Release\ folder. -->
-  <PropertyGroup>
-    <IntDir>$(Platform)\$(Configuration)\cholesky_openmp\</IntDir>
-  </PropertyGroup>
-
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
