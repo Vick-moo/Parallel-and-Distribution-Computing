@@ -17,9 +17,9 @@
 //  and has "OpenMP Support" set to Yes (/openmp).
 //
 //  Run:
-//      cholesky_openmp.exe                 <-- 6 sizes, 5 reps, all cores, B=128
-//      cholesky_openmp.exe 10              <-- 6 sizes, 10 reps
-//      cholesky_openmp.exe 10 4            <-- 6 sizes, 10 reps, 4 threads
+//      cholesky_openmp.exe                 <-- 7 sizes, 5 reps, all cores, B=128
+//      cholesky_openmp.exe 10              <-- 7 sizes, 10 reps
+//      cholesky_openmp.exe 10 4            <-- 7 sizes, 10 reps, 4 threads
 //      cholesky_openmp.exe 5 4 256         <-- ... and block size 256
 //
 //  -----------------------------------------------------------------------------
@@ -430,7 +430,7 @@ static bool parse_int(const char* s, int lo, int hi, int& out)
 // =============================================================================
 int main(int argc, char** argv)
 {
-    const int sizes[] = { 1000, 1500, 2000, 2500, 3000, 3500 };
+    const int sizes[] = { 1000, 1500, 2000, 2500, 3000, 3500, 4000 };
     const int nSizes  = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     int reps  = 5;
