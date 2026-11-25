@@ -17,10 +17,11 @@
 //  and has "OpenMP Support" set to Yes (/openmp).
 //
 //  Run:
-//      cholesky_openmp.exe                 <-- 7 sizes, 5 reps, all cores, B=128
+//      cholesky_openmp.exe                 <-- 7 sizes, 5 reps, all cores, B=128, pad=8
 //      cholesky_openmp.exe 10              <-- 7 sizes, 10 reps
 //      cholesky_openmp.exe 10 4            <-- 7 sizes, 10 reps, 4 threads
-//      cholesky_openmp.exe 5 4 256         <-- ... and block size 256
+//      cholesky_openmp.exe 5 4 256         <-- ... block size 256, pad=8
+//      cholesky_openmp.exe 5 4 256 16      <-- ... and padding 16
 //
 //  -----------------------------------------------------------------------------
 //  WHY THIS IS NOT JUST "#pragma omp parallel for" ON THE OUTER i LOOP
@@ -67,8 +68,24 @@
 //  kernels re-use data out of cache instead of streaming the whole matrix from
 //  RAM every time.
 //
+//  -----------------------------------------------------------------------------
+//  CACHE-LINE PADDING
+//  -----------------------------------------------------------------------------
+//  The working matrix W is stored with a padded leading dimension
+//
+//      ld = n + pad
+//
+//  where pad is rounded up so that consecutive rows are a whole number of
+//  64-byte cache lines apart (8 doubles per line).  The extra columns are never
+//  read or written: they only change the distance between rows.  Without
+//  padding, rows that are exactly n doubles apart can map to the same cache
+//  sets, and the column accesses in phases (1) and (2) then evict each other.
+//  Padding shifts each row by one or more cache lines and keeps adjacent row
+//  boundaries off the same line, which also reduces false sharing between rows
+//  written by different threads.  pad = 0 keeps the unpadded layout.
+//
 //  Complexity: the same (n^3 - n)/6 multiply-adds as the sequential version
-//  (= about n^3/3 FLOPs), Theta(n^2) memory.
+//  (= about n^3/3 FLOPs), Theta(n*(n+pad)) memory.
 // =============================================================================
 
 #include <cstdio>
@@ -153,6 +170,35 @@ static void make_positive_definite(int n, vector<double>& A)
 }
 
 // =============================================================================
+//  [3b] Padded leading dimension
+// =============================================================================
+// pad = 0 returns the unpadded layout.  For pad > 0 the leading dimension is
+// n + pad rounded up to a multiple of 8 doubles (one 64-byte cache line), so
+// every row starts at the same offset inside a cache line and neighbouring
+// rows are separated by a whole number of lines.
+// =============================================================================
+static int padded_ld(int n, int pad)
+{
+    if (pad <= 0) return n;
+
+    int ld = n + pad;
+    const int line = 8;                         // 8 doubles = 64 bytes
+    if (ld % line != 0) ld += line - (ld % line);
+    return ld;
+}
+
+// Copy the dense n x n matrix A into the leading dimension ld of W.
+// The padding columns are left untouched; the factorisation never reads them.
+static void copy_A_to_W(int n, int ld, const vector<double>& A, vector<double>& W)
+{
+    for (int i = 0; i < n; i++) {
+        copy(A.data() + (size_t)i * n,
+             A.data() + (size_t)(i + 1) * n,
+             W.data() + (size_t)i * ld);
+    }
+}
+
+// =============================================================================
 //  [4] Parallel blocked Cholesky factorisation
 // =============================================================================
 // Factors in place: on entry W is the SPD matrix, on return the lower triangle
@@ -162,7 +208,7 @@ static void make_positive_definite(int n, vector<double>& A)
 //
 // The three phases below correspond to the three comments in the file header.
 // =============================================================================
-static bool cholesky_blocked(int n, double* W, int B)
+static bool cholesky_blocked(int n, double* W, int ld, int B)
 {
     for (int k = 0; k < n; k += B) {
 
@@ -177,7 +223,7 @@ static bool cholesky_blocked(int n, double* W, int B)
         // above it, so the two loops over i are safe to run in parallel.
         for (int j = k; j < ke; j++) {
 
-            double*       jr  = W + (size_t)j * n;
+            double*       jr  = W + (size_t)j * ld;
             const double  d   = jr[j];
 
             // A non-positive pivot means the matrix is not positive definite.
@@ -193,16 +239,16 @@ static bool cholesky_blocked(int n, double* W, int B)
             // L[i][j] = W[i][j] / L[j][j]
             #pragma omp parallel for schedule(static) if (rows >= 64)
             for (int i = j + 1; i < ke; i++) {
-                W[(size_t)i * n + j] /= piv;
+                W[(size_t)i * ld + j] /= piv;
             }
 
             // W[i][m] -= L[i][j] * L[m][j], for the lower triangle of the block
             #pragma omp parallel for schedule(dynamic, 4) if (rows >= 64)
             for (int i = j + 1; i < ke; i++) {
-                double*      ir  = W + (size_t)i * n;
+                double*      ir  = W + (size_t)i * ld;
                 const double lij = ir[j];           // must be read before writing
                 for (int m = j + 1; m <= i; m++) {
-                    ir[m] -= lij * W[(size_t)m * n + j];
+                    ir[m] -= lij * W[(size_t)m * ld + j];
                 }
             }
         }
@@ -215,13 +261,13 @@ static bool cholesky_blocked(int n, double* W, int B)
         // independent, so the parallel loop is over i.
         for (int j = k; j < ke; j++) {
 
-            const double* jr   = W + (size_t)j * n;
+            const double* jr   = W + (size_t)j * ld;
             const double  piv  = jr[j];
             const int     rows = n - ke;
 
             #pragma omp parallel for schedule(static) if (rows >= 64)
             for (int i = ke; i < n; i++) {
-                double* ir = W + (size_t)i * n;
+                double* ir = W + (size_t)i * ld;
                 double  s  = ir[j];
                 for (int m = k; m < j; m++) s -= ir[m] * jr[m];
                 ir[j] = s / piv;
@@ -240,10 +286,10 @@ static bool cholesky_blocked(int n, double* W, int B)
             #pragma omp parallel for schedule(dynamic, 8) if (rest >= 64)
             for (int i = ke; i < n; i++) {
 
-                double* ir = W + (size_t)i * n;
+                double* ir = W + (size_t)i * ld;
 
                 for (int m = ke; m <= i; m++) {
-                    const double* mr = W + (size_t)m * n;
+                    const double* mr = W + (size_t)m * ld;
                     double s = 0.0;
                     for (int j = k; j < ke; j++) s += ir[j] * mr[j];
                     ir[m] -= s;
@@ -265,16 +311,16 @@ static bool cholesky_blocked(int n, double* W, int B)
 // =============================================================================
 static const double REL_TOL = 1e-9;
 
-static double verify_factor(int n, const vector<double>& A, const double* W)
+static double verify_factor(int n, const vector<double>& A, const double* W, int ld)
 {
     double max_abs = 0.0;
 
     for (int i = 0; i < n; i++) {
 
-        const double* ir = W + (size_t)i * n;
+        const double* ir = W + (size_t)i * ld;
 
         for (int j = 0; j <= i; j++) {          // L is lower triangular
-            const double* jr = W + (size_t)j * n;
+            const double* jr = W + (size_t)j * ld;
 
             double s = 0.0;
             for (int k = 0; k <= j; k++) {      // this is (L * L^T)[i][j]
@@ -308,7 +354,7 @@ struct Result {
 // =============================================================================
 //  [7] Run one matrix size
 // =============================================================================
-static Result run_one(int n, int reps, int block)
+static Result run_one(int n, int reps, int block, int ld)
 {
     Result r{};
     r.n  = n;
@@ -317,7 +363,7 @@ static Result run_one(int n, int reps, int block)
     vector<double> A, W;
 
     make_positive_definite(n, A);
-    W.assign(A.size(), 0.0);
+    W.assign((size_t)n * (size_t)ld, 0.0);
 
     // Largest entry of A, used to turn REL_TOL into an absolute limit.
     for (size_t i = 0; i < A.size(); i++) {
@@ -327,8 +373,8 @@ static Result run_one(int n, int reps, int block)
 
     // Warm-up: one untimed run, so page faults, the CPU frequency ramp and
     // cold caches are not charged to the measured repetitions.
-    copy(A.begin(), A.end(), W.begin());
-    if (!cholesky_blocked(n, W.data(), block)) {
+    copy_A_to_W(n, ld, A, W);
+    if (!cholesky_blocked(n, W.data(), ld, block)) {
         r.ok = false;
         return r;
     }
@@ -341,11 +387,11 @@ static Result run_one(int n, int reps, int block)
         // W must start as a copy of A because the factorisation is in place.
         // The copy is outside the timed region, like the fill() in the
         // sequential version.
-        copy(A.begin(), A.end(), W.begin());
+        copy_A_to_W(n, ld, A, W);
 
         double t0 = now_sec();
 
-        bool ok = cholesky_blocked(n, W.data(), block);
+        bool ok = cholesky_blocked(n, W.data(), ld, block);
 
         double dt = now_sec() - t0;
 
@@ -359,7 +405,7 @@ static Result run_one(int n, int reps, int block)
     }
 
     // Correctness check, outside the timed region.
-    r.current_err = verify_factor(n, A, W.data());
+    r.current_err = verify_factor(n, A, W.data(), ld);
 
     r.best_ms = t_best * 1000.0;
     r.avg_ms  = (t_sum / (double)reps) * 1000.0;
@@ -377,7 +423,7 @@ static void print_table(const vector<Result>& r, int base_n)
 
     printf("\n%s\n", sep);
     printf("| %-20s | %-12s | %-13s | %-13s | %-14s | %-15s | %-8s |\n",
-           "Reason for Selection", "Matrix Size", "Best Ts (ms)", "Average Ts (ms)",
+           "Reason for Selection", "Matrix Size", "Best Tp (ms)", "Average Tp (ms)",
            "Current Error", "Max Acceptable", "Status");
     printf("%s\n", sep);
 
@@ -435,18 +481,23 @@ int main(int argc, char** argv)
 
     int reps  = 5;
     int block = 128;
+    int pad   = 8;                              // extra doubles per row (0 = none)
     int threads = 0;                            // 0 = use the OpenMP default
 
     if (argc > 1 && !parse_int(argv[1], 1, 1000, reps)) {
-        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024]\n", argv[0]);
+        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024] [pad 0..256]\n", argv[0]);
         return 1;
     }
     if (argc > 2 && !parse_int(argv[2], 1, 256, threads)) {
-        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024]\n", argv[0]);
+        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024] [pad 0..256]\n", argv[0]);
         return 1;
     }
     if (argc > 3 && !parse_int(argv[3], 16, 1024, block)) {
-        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024]\n", argv[0]);
+        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024] [pad 0..256]\n", argv[0]);
+        return 1;
+    }
+    if (argc > 4 && !parse_int(argv[4], 0, 256, pad)) {
+        printf("usage: %s [repetitions 1..1000] [threads 1..256] [block 16..1024] [pad 0..256]\n", argv[0]);
         return 1;
     }
 
@@ -475,15 +526,16 @@ int main(int argc, char** argv)
 
     printf("Parallel Cholesky (OpenMP, blocked right-looking)\n");
     printf("Matrix sizes: %d   Repetitions per size: %d\n", nSizes, reps);
-    printf("Threads: %d   Block size: %d\n\n", nthreads, block);
+    printf("Threads: %d   Block size: %d   Padding: %d\n\n", nthreads, block, pad);
 
     vector<Result> results(nSizes);
 
     for (int s = 0; s < nSizes; s++) {
-        printf("[%d/%d] n = %-5d ... ", s + 1, nSizes, sizes[s]);
+        const int ld = padded_ld(sizes[s], pad);
+        printf("[%d/%d] n = %-5d ld = %-5d ... ", s + 1, nSizes, sizes[s], ld);
         fflush(stdout);
 
-        results[s] = run_one(sizes[s], reps, block);
+        results[s] = run_one(sizes[s], reps, block, ld);
 
         if (!results[s].ok) {
             printf("FAILED (matrix is not positive definite)\n");
@@ -504,7 +556,7 @@ int main(int argc, char** argv)
 
     printf("\nVerification: full lower triangle, max|A - L*L^T| compared with\n");
     printf("              REL_TOL * max|A|   (REL_TOL = %.0e).\n", REL_TOL);
-    printf("Threads used: %d   Block size: %d\n", nthreads, block);
+    printf("Threads used: %d   Block size: %d   Padding: %d\n", nthreads, block, pad);
 
     return 0;
 }
