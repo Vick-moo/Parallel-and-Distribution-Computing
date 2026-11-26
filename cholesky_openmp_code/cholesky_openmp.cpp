@@ -17,10 +17,10 @@
 //  and has "OpenMP Support" set to Yes (/openmp).
 //
 //  Run:
-//      cholesky_openmp.exe                 <-- 7 sizes, 5 reps, all cores, B=128, pad=8
+//      cholesky_openmp.exe                 <-- 7 sizes, 5 reps, all cores, B=128, pad=0
 //      cholesky_openmp.exe 10              <-- 7 sizes, 10 reps
 //      cholesky_openmp.exe 10 4            <-- 7 sizes, 10 reps, 4 threads
-//      cholesky_openmp.exe 5 4 256         <-- ... block size 256, pad=8
+//      cholesky_openmp.exe 5 4 256         <-- ... block size 256, pad=0
 //      cholesky_openmp.exe 5 4 256 16      <-- ... and padding 16
 //
 //  -----------------------------------------------------------------------------
@@ -69,6 +69,17 @@
 //  RAM every time.
 //
 //  -----------------------------------------------------------------------------
+//  TWO OPENMP MODELS
+//  -----------------------------------------------------------------------------
+//  Phases (1) and (2) use loop-level worksharing (#pragma omp parallel for).
+//  Phase (3) deliberately uses a second model: an explicit SPMD region in
+//  which every thread enters the same block and computes its own block-cyclic
+//  set of rows using omp_get_thread_num() and omp_get_num_threads().
+//  The arithmetic is identical; only the assignment of rows to threads changes.
+//  The outer panel loop stays serial because panel k+1 depends on panel k; the
+//  SPMD region is inside phase (3), where the rows are independent.
+//
+//  -----------------------------------------------------------------------------
 //  CACHE-LINE PADDING
 //  -----------------------------------------------------------------------------
 //  The working matrix W is stored with a padded leading dimension
@@ -82,7 +93,8 @@
 //  sets, and the column accesses in phases (1) and (2) then evict each other.
 //  Padding shifts each row by one or more cache lines and keeps adjacent row
 //  boundaries off the same line, which also reduces false sharing between rows
-//  written by different threads.  pad = 0 keeps the unpadded layout.
+//  written by different threads.  pad = 0 (the default) keeps the unpadded
+//  layout; a non-zero value is only used for the padding experiment.
 //
 //  Complexity: the same (n^3 - n)/6 multiply-adds as the sequential version
 //  (= about n^3/3 FLOPs), Theta(n*(n+pad)) memory.
@@ -280,19 +292,40 @@ static bool cholesky_blocked(int n, double* W, int ld, int B)
         // Element (i,m) is a dot product of row i and row m of the panel, both
         // contiguous in memory. Row i is written only by the thread that owns
         // it, so there is no race. This is where nearly all the time is spent.
+        //
+        // SECOND MODEL: explicit SPMD region. Every thread executes the same
+        // block with its own tid and takes a block-cyclic set of rows. Chunks
+        // of 8 contiguous rows preserve locality, while the round-robin
+        // assignment gives every thread a similar mix of cheap and expensive
+        // rows (the work per row grows with i).
         const int rest = n - ke;
         if (rest > 0) {
 
-            #pragma omp parallel for schedule(dynamic, 8) if (rest >= 64)
-            for (int i = ke; i < n; i++) {
+            #pragma omp parallel if (rest >= 64)
+            {
+                int tid = 0;
+                int nth = 1;
+#ifdef _OPENMP
+                tid = omp_get_thread_num();
+                nth = omp_get_num_threads();
+#endif
+                const int chunk = 8;
 
-                double* ir = W + (size_t)i * ld;
+                for (int base = ke + tid * chunk; base < n; base += nth * chunk) {
 
-                for (int m = ke; m <= i; m++) {
-                    const double* mr = W + (size_t)m * ld;
-                    double s = 0.0;
-                    for (int j = k; j < ke; j++) s += ir[j] * mr[j];
-                    ir[m] -= s;
+                    const int hi = (base + chunk < n) ? base + chunk : n;
+
+                    for (int i = base; i < hi; i++) {
+
+                        double* ir = W + (size_t)i * ld;
+
+                        for (int m = ke; m <= i; m++) {
+                            const double* mr = W + (size_t)m * ld;
+                            double s = 0.0;
+                            for (int j = k; j < ke; j++) s += ir[j] * mr[j];
+                            ir[m] -= s;
+                        }
+                    }
                 }
             }
         }
@@ -481,7 +514,7 @@ int main(int argc, char** argv)
 
     int reps  = 5;
     int block = 128;
-    int pad   = 8;                              // extra doubles per row (0 = none)
+    int pad   = 0;                              // extra doubles per row (0 = none)
     int threads = 0;                            // 0 = use the OpenMP default
 
     if (argc > 1 && !parse_int(argv[1], 1, 1000, reps)) {
